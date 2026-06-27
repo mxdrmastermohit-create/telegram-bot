@@ -2,7 +2,7 @@ import os
 from telegram import Update
 from telegram.ext import Application , CommandHandler , MessageHandler , filters, ContextTypes
 
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = "6329684730:AAGrlWSXfHVvoDBJZAf8Otc57hQnS1utCDE"
 USERS_FILE = "users.txt"
 
 def load_users():
