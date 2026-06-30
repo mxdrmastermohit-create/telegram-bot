@@ -2,20 +2,36 @@ import os
 from telegram import Update
 from telegram.ext import Application , CommandHandler , MessageHandler , filters, ContextTypes
 
-#TOKEN = "6329684730:AAGrlWSXfHVvoDBJZAf8Otc57hQnS1utCDE"
+TOKEN = "6329684730:AAGrlWSXfHVvoDBJZAf8Otc57hQnS1utCDE"
 USERS_FILE = "users.txt"
+ADMIN_ID = 6261901431 # Replace 0 with your actual Telegram chat ID to receive order notifications
 
 def load_users():
+    loaded_users = {}
     if os.path.exists(USERS_FILE):
         with open(USERS_FILE, "r") as file:
-            return set(int(line.strip()) for line in file)
-    return set()
+            for line in file:
+                parts = line.strip().split(',', 1) # Split only on the first comma
+                if len(parts) == 2:
+                    try:
+                        chat_id = int(parts[0])
+                        user_name = parts[1]
+                        loaded_users[chat_id] = user_name
+                    except ValueError:
+                        print(f"Warning: Could not parse line in users.txt: {line.strip()}")
+                elif len(parts) == 1: # Handle old format (only chat_id)
+                     try:
+                        chat_id = int(parts[0])
+                        loaded_users[chat_id] = "Unknown User" # Assign a default name
+                     except ValueError:
+                        print(f"Warning: Could not parse line in users.txt: {line.strip()}")
+    return loaded_users
 
-def save_user(chat_id):
-    users.add(chat_id)
+def save_all_users_data():
+    with open(USERS_FILE, "w") as file: # Write mode to overwrite
+        for chat_id, user_name in users.items():
+            file.write(f"{chat_id},{user_name}\n")
 
-    with open(USERS_FILE, "a") as file:
-        file.write(f"{chat_id}\n")
 users = load_users()
 
 # Cafe menu and user states
@@ -70,6 +86,45 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             print(f"Could not send message to user {user_id}: {e}")
     await update.message.reply_text("Broadcast sent successfully!")
 
+async def reply_to_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("You are not authorized to use this command.")
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text("Usage: /message_user <chat_id> <message>") # Updated usage string
+        return
+
+    try:
+        target_chat_id = int(context.args[0])
+        reply_message = " ".join(context.args[1:])
+
+        await context.bot.send_message(target_chat_id, f"Admin replied: {reply_message}")
+        await update.message.reply_text(f"Message sent to user {target_chat_id}.")
+    except ValueError:
+        await update.message.reply_text("Invalid chat ID. Please provide a numerical chat ID.")
+    except Exception as e:
+        await update.message.reply_text(f"Failed to send message: {e}")
+
+async def user_data_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("You are not authorized to use this command.")
+        return
+
+    if not users:
+        await update.message.reply_text("No users saved yet.")
+        return
+
+    user_list_message = "Saved Users:\n"
+    for chat_id, user_name in users.items():
+        user_list_message += f"- Name: {user_name}, ID: {chat_id}\n"
+
+    try:
+        await context.bot.send_message(ADMIN_ID, user_list_message)
+        await update.message.reply_text("User data sent to your admin chat.")
+    except Exception as e:
+        await update.message.reply_text(f"Failed to send user data: {e}")
+
 
 #messages
 def handel_responces(chat, user_name):
@@ -87,8 +142,11 @@ async def handel_message(update : Update, context : ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user_name = update.message.from_user.first_name
     chat_id = update.message.chat_id
-    if chat_id not in users:
-       save_user(chat_id)
+
+    # If new user or name changed, update the users dictionary and save
+    if chat_id not in users or users[chat_id] != user_name:
+       users[chat_id] = user_name
+       save_all_users_data() # Save the updated user data
 
     print(f"user {user_name} user id texted {text}")
 
@@ -125,7 +183,16 @@ async def handel_message(update : Update, context : ContextTypes.DEFAULT_TYPE):
     elif chat_id in user_cafe_state and user_cafe_state[chat_id]['state'] == 'confirming_order':
         if text.lower() == 'yes':
             final_total = user_cafe_state[chat_id]['total']
-            await update.message.reply_text(f"Thank you for your order! Your total bill is {final_total}₹. Enjoy!\nType /cafe to order again.\n\nthank you bhai/bhen bot use kerne ke liye @pokemxdr ye mera username hai esper feedback bhej de")
+            cart_items = user_cafe_state[chat_id]['cart']
+            await update.message.reply_text(f"Thank you for your order! Your total bill is {final_total}₹. Enjoy!\nType /cafe to order again.\n\nthank you bhai/bhen bot use kerke esper feedback bhej de")
+
+            # Send order details to admin
+            admin_order_message = f"New order received!\nFrom User: {user_name} (ID: {chat_id})\nItems: {', '.join([item.title() for item in cart_items])}\nTotal: {final_total}₹"
+            try:
+                await context.bot.send_message(ADMIN_ID, admin_order_message)
+            except Exception as e:
+                print(f"Could not send admin order notification to {ADMIN_ID}: {e}")
+
             del user_cafe_state[chat_id] # Clear the user's cafe state
         elif text.lower() == 'no':
             await update.message.reply_text("Order not confirmed. Do you want to add/remove something? (add/remove) or 'cancel')")
@@ -185,10 +252,11 @@ async def handel_message(update : Update, context : ContextTypes.DEFAULT_TYPE):
         responce = handel_responces(text, user_name)
         await update.message.reply_text(responce)
         print(f"bot reply - '{responce}' to text {text}")
+        print(f"{update.message.chat_id}")
 
 
 
-#error_handler
+#error
 async def error(update : Update, context : ContextTypes.DEFAULT_TYPE):
     print(f"Error - Update -  {update} caused error {context.error}")
 
@@ -205,6 +273,8 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("broadcast", broadcast))
     app.add_handler(CommandHandler("cafe", cafe_command)) # Added cafe command handler
+    app.add_handler(CommandHandler("message_user", reply_to_user_command)) # Changed command name from reply_to_user
+    app.add_handler(CommandHandler("user_data", user_data_command)) # New command handler
 
     #messages handler
     app.add_handler(MessageHandler(filters.TEXT,handel_message))
@@ -212,4 +282,4 @@ if __name__ == '__main__':
     #polling...
     print("polling..")
     # Use run_polling() in Colab after applying nest_asyncio to avoid event loop conflicts
-    app.run_polling()
+    app.run_polling(close_loop=False)
